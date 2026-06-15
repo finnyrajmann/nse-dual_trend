@@ -335,60 +335,110 @@ def send_email(exits, entries, holds):
     today     = datetime.now().strftime('%d %b %Y')
     subject   = f"NSE Dual Trend — {today} | {len(entries)} new | {len(holds)} open"
 
-    lines = []
-    lines.append(f"NSE DUAL TREND SWING TRADER — {today}")
-    lines.append("=" * 50)
+    def table_style():
+        return 'border-collapse:collapse;width:100%;font-family:Arial,sans-serif;font-size:14px;'
 
-    lines.append(f"\n{'─'*50}")
+    def th_style():
+        return 'background:#2c3e50;color:#fff;padding:8px 12px;text-align:left;'
+
+    def td_style(align='left'):
+        return f'padding:7px 12px;border-bottom:1px solid #eee;text-align:{align};'
+
+    def section_header(title):
+        return f'<h3 style="color:#2c3e50;margin:24px 0 8px 0;">{title}</h3>'
+
+    html = f'''
+    <div style="font-family:Arial,sans-serif;max-width:700px;margin:0 auto;">
+    <h2 style="background:#2c3e50;color:#fff;padding:14px 18px;margin:0;border-radius:4px 4px 0 0;">
+        📈 NSE Dual Trend Swing Trader — {today}
+    </h2>
+    '''
+
+    # EXITS
+    html += section_header(f'✅ Exits Today ({len(exits)})') if exits else section_header('✅ Exits: None today')
     if exits:
-        lines.append(f"\n✅ EXITS TODAY ({len(exits)})")
+        html += f'<table style="{table_style()}"><thead><tr>'
+        for col in ['', 'Symbol', 'P&L %', 'P&L ₹', 'Days', 'Reason']:
+            html += f'<th style="{th_style()}">{col}</th>'
+        html += '</tr></thead><tbody>'
         for r in exits:
             icon = '🟢' if r['PnL'] >= 0 else '🔴'
-            lines.append(f"   {icon} {r['Symbol']:<12} {r['PnL%']:+.2f}%  "
-                         f"₹{r['PnL']:+.0f}  ({r['DaysHeld']}d)  {r['ExitReason']}")
-    else:
-        lines.append(f"\n✅ EXITS: None today")
+            html += f'''<tr>
+                <td style="{td_style()}">{icon}</td>
+                <td style="{td_style()}"><b>{r['Symbol']}</b></td>
+                <td style="{td_style('right')}">{r['PnL%']:+.2f}%</td>
+                <td style="{td_style('right')}">₹{r['PnL']:+.0f}</td>
+                <td style="{td_style('right')}">{r['DaysHeld']}d</td>
+                <td style="{td_style()}">{r['ExitReason']}</td>
+            </tr>'''
+        html += '</tbody></table>'
 
-    lines.append(f"\n{'─'*50}")
+    # ENTRIES
+    html += section_header(f'🔔 New Paper Entries ({len(entries)})') if entries else section_header('🔔 New Entries: None today')
     if entries:
-        lines.append(f"\n🔔 NEW PAPER ENTRIES ({len(entries)})")
+        html += f'<table style="{table_style()}"><thead><tr>'
+        for col in ['Symbol', 'Industry', 'Price ₹', 'Stop ₹', 'Upper Line ₹', 'Lower Line ₹']:
+            html += f'<th style="{th_style()}">{col}</th>'
+        html += '</tr></thead><tbody>'
         for e in entries:
-            lines.append(f"\n   ▶ {e['Symbol']} ({e['Industry']})")
-            lines.append(f"     Price: ₹{e['Price']}  |  Stop: ₹{e['Stop']}")
-            lines.append(f"     Upper Line: ₹{e['UpperLine']}  |  Lower Line: ₹{e['LowerLine']}")
-    else:
-        lines.append(f"\n🔔 NEW ENTRIES: None today")
+            html += f'''<tr>
+                <td style="{td_style()}"><b>{e['Symbol']}</b></td>
+                <td style="{td_style()}">{e['Industry']}</td>
+                <td style="{td_style('right')}">₹{e['Price']}</td>
+                <td style="{td_style('right')}">₹{e['Stop']}</td>
+                <td style="{td_style('right')}">₹{e['UpperLine']}</td>
+                <td style="{td_style('right')}">₹{e['LowerLine']}</td>
+            </tr>'''
+        html += '</tbody></table>'
 
-    lines.append(f"\n{'─'*50}")
+    # OPEN POSITIONS
     if holds:
         total_pnl = sum(r['PnL'] for r in holds)
-        lines.append(f"\n📋 OPEN POSITIONS ({len(holds)})  |  Total P&L: ₹{total_pnl:+.0f}")
-        lines.append(f"   {'Symbol':<12} {'Entry':>8} {'Price':>8} {'P&L%':>7} {'P&L₹':>8} {'Days':>5}")
-        lines.append(f"   {'-'*55}")
+        pnl_color = '#27ae60' if total_pnl >= 0 else '#e74c3c'
+        html += section_header(
+            f'📋 Open Positions ({len(holds)}) &nbsp;|&nbsp; '
+            f'Total P&L: <span style="color:{pnl_color}">₹{total_pnl:+.0f}</span>'
+        )
+        html += f'<table style="{table_style()}"><thead><tr>'
+        for col in ['', 'Symbol', 'Entry ₹', 'Price ₹', 'P&L %', 'P&L ₹', 'Days']:
+            html += f'<th style="{th_style()}">{col}</th>'
+        html += '</tr></thead><tbody>'
         for r in holds:
             icon = '🟢' if r['PnL'] >= 0 else '🔴'
-            lines.append(f"   {icon} {r['Symbol']:<12} "
-                         f"₹{r['EntryPrice']:>7.2f} ₹{r['Price']:>7.2f} "
-                         f"{r['PnL%']:>+7.2f}% ₹{r['PnL']:>+8.0f} {r['DaysHeld']:>4}d")
+            html += f'''<tr>
+                <td style="{td_style()}">{icon}</td>
+                <td style="{td_style()}"><b>{r['Symbol']}</b></td>
+                <td style="{td_style('right')}">₹{r['EntryPrice']:.2f}</td>
+                <td style="{td_style('right')}">₹{r['Price']:.2f}</td>
+                <td style="{td_style('right')}">{r['PnL%']:+.2f}%</td>
+                <td style="{td_style('right')}">₹{r['PnL']:+.0f}</td>
+                <td style="{td_style('right')}">{r['DaysHeld']}d</td>
+            </tr>'''
+        html += '</tbody></table>'
     else:
-        lines.append(f"\n📋 OPEN POSITIONS: None")
+        html += section_header('📋 Open Positions: None')
 
-    lines.append(f"\n{'─'*50}")
-    lines.append(f"\nTrade log: https://github.com/{repo_name}/blob/main/data/dt_trade_log.csv")
-    lines.append(f"\n— NSE Dual Trend Trader (automated)")
+    # FOOTER
+    html += f'''
+    <p style="margin-top:24px;font-size:12px;color:#888;">
+        <a href="https://github.com/{repo_name}/blob/main/data/dt_trade_log.csv" style="color:#2c3e50;">
+            View trade log on GitHub
+        </a><br>
+        — NSE Dual Trend Trader (automated)
+    </p>
+    </div>
+    '''
 
-    body = '\n'.join(lines)
-    msg  = MIMEMultipart()
+    msg = MIMEMultipart()
     msg['From']    = sender
     msg['To']      = recipient
     msg['Subject'] = subject
-    msg.attach(MIMEText(body, 'plain'))
+    msg.attach(MIMEText(html, 'html'))
 
     with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
         server.login(sender, password)
         server.sendmail(sender, recipient, msg.as_string())
     print(f"  Email sent to {recipient}")
-
 
 # ─────────────────────────────────────────────
 # MAIN
