@@ -1,1 +1,2 @@
 Symbol,EntryDate,EntryPrice,Quantity,Capital,ExitDate,ExitPrice,PnL,PnL%,DaysHeld,ExitReason,TrackType
+ALLCARGO,2026-06-16,9.18,1089,9997.02,2026-06-24,8.24,-1023.66,-10.24,8,Stop loss hit (8.26),Paper
