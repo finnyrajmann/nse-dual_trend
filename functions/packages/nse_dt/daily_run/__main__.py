@@ -491,6 +491,15 @@ def main(args):
         send_email(exits, entries, holds)
 
         print("\n  Done.\n")
+        # Trigger DTDTF function
+        dtdtf_url = os.environ.get('DTDTF_URL')
+        if dtdtf_url:
+            try:
+                requests.post(dtdtf_url, json={}, timeout=10)
+                print("  DTDTF function triggered.")
+            except Exception as e:
+                print(f"  DTDTF trigger failed: {e}")
+
         return {"statusCode": 200, "body": "Pipeline complete"}
 
     except Exception as e:
