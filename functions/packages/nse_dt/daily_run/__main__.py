@@ -216,6 +216,8 @@ def get_indicators(symbol, period=DATA_PERIOD):
 
     closes = [b['close'] for b in bars]
     price  = round(closes[-1], 2)
+    ema9   = calc_ema(closes, 9)
+    ema30  = calc_ema(closes, 30)
     ema200 = calc_ema(closes, EMA_LONG)
 
     dt_results = compute_dual_trend(bars, LOOKBACK)
@@ -223,6 +225,8 @@ def get_indicators(symbol, period=DATA_PERIOD):
 
     return {
         'price':            price,
+        'ema9':             ema9,
+        'ema30':            ema30,
         'ema200':           ema200,
         'bars':             bars,
         'upper_line':       round(last['upper_line'], 2),
@@ -394,6 +398,7 @@ def run_entry(watchlist, positions):
     """
     open_symbols = {p['Symbol'].strip() for p in positions}
     new_entries  = []
+    snapshots    = []
 
     for row in watchlist:
         symbol = row['Symbol'].strip()
@@ -432,12 +437,22 @@ def run_entry(watchlist, positions):
                 'LowerLine':   ind['lower_line'],
                 'InitialStop': round(ind['price'] * (1 - TRAIL_STOP_PCT / 100), 2),
             })
+            snapshots.append({
+                'Symbol':    symbol,
+                'EntryDate': entry_date,
+                'Price':     ind['price'],
+                'UpperLine': ind['upper_line'],
+                'LowerLine': ind['lower_line'],
+                'EMA9':      ind['ema9'],
+                'EMA30':     ind['ema30'],
+                'EMA200':    ind['ema200'],
+            })
             print(f"  Added {symbol} to positions as Paper "
                   f"(qty: {quantity} @ Rs.{ind['price']})")
 
         time.sleep(SLEEP)
 
-    return new_entries, positions
+    return new_entries, positions, snapshots
 
 
 # ─────────────────────────────────────────────
@@ -615,6 +630,7 @@ def main(args):
     hit_log_path  = f'data/trade_log_hit_{SYSTEM_CODE}.csv'
     miss_log_path = f'data/trade_log_miss_{SYSTEM_CODE}.csv'
     wl_path       = f'data/watchlist_{SYSTEM_CODE}.csv'
+    snap_path     = f'data/entry_snapshot_{SYSTEM_CODE}.csv'
 
     try:
         # Load data from GitHub
@@ -623,11 +639,13 @@ def main(args):
         hitlog_content, hit_sha    = github_get(repo_name, hit_log_path, pat)
         misslog_content, miss_sha  = github_get(repo_name, miss_log_path, pat)
         wl_content, _              = github_get(repo_name, wl_path, pat)
+        snap_content, snap_sha     = github_get(repo_name, snap_path, pat)
 
         positions = parse_csv(pos_content)
         hit_log   = parse_csv(hitlog_content)
         miss_log  = parse_csv(misslog_content)
         watchlist = parse_csv(wl_content)
+        entry_snapshots = parse_csv(snap_content)
         print(f"      {len(positions)} open positions | {len(watchlist)} watchlist stocks")
 
         # Exit monitor
@@ -637,7 +655,8 @@ def main(args):
 
         # Entry scanner
         print("\n[3/5] Entry Scanner...")
-        entries, positions = run_entry(watchlist, positions)
+        entries, positions, new_snapshots = run_entry(watchlist, positions)
+        entry_snapshots.extend(new_snapshots)
         print(f"      {len(entries)} new signal(s)")
 
         # Sync to GitHub
@@ -655,6 +674,10 @@ def main(args):
                    to_csv(hit_log, log_fields), hit_sha, commit_msg)
         github_put(repo_name, miss_log_path, pat,
                    to_csv(miss_log, log_fields), miss_sha, commit_msg)
+
+        snap_fields = ['Symbol', 'EntryDate', 'Price', 'UpperLine', 'LowerLine', 'EMA9', 'EMA30', 'EMA200']
+        github_put(repo_name, snap_path, pat,
+                   to_csv(entry_snapshots, snap_fields), snap_sha, commit_msg)
 
         # Cumulative trade-log P&L
         alltime_pnl = (sum(float(r['PnL']) for r in hit_log) +
