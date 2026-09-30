@@ -1,1 +1,2 @@
 Symbol,EntryDate,EntryPrice,Quantity,Capital,ExitDate,ExitPrice,PnL,PnL%,DaysHeld,ExitReason,TrackType
+YESBANK,2026-09-24,23.24,430,9993.2,2026-09-30,20.71,-1087.9,-10.89,6,"Trailing stop hit (20.77, high since entry 23.079999923706055)",Paper
