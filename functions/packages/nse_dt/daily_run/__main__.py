@@ -15,8 +15,9 @@ Design summary (locked, Sep 2026 rewrite):
 - NEW daily EMA200 freshness gate on entry: price must be above EMA200
   TODAY (re-checked every run, not trusted from the screener's structural
   pass) — same discipline as 200emabb / bb_ema_cross.
-- NEW stop exit: trailing stop, price <= 10% below the highest daily HIGH
-  since entry (replaces the old fixed 10%-below-entry-price stop).
+- NEW stop exit: trailing stop, daily CLOSE <= 3% below the highest candle
+  BODY TOP since entry (body top = max(open, close); wicks ignored).
+  Replaces the earlier 10% trailing stop on the daily high.
 - Signal exit: both step lines flip bearish on the same bar (trend
   reversal) — no profit target; this system rides the open-ended trend,
   intentionally uncapped.
@@ -30,6 +31,14 @@ Design summary (locked, Sep 2026 rewrite):
 - Existing open positions carry forward into the new logic as-is (no
   special migration) — a bulk closure on the first run under the new
   trailing-stop/signal rules is expected and fine.
+- Trading calendar: data/nse_holidays.csv (Date,Type,Description; Type is
+  HOLIDAY or COVERS_THROUGH), read from the GitHub repo. A day is a session
+  if it is Mon-Fri and not a listed holiday. On a non-session day the run
+  exits early and sends a short holiday email (no positions or logs touched).
+  "Stale" = a stock's newest bar is older than the last COMPLETED session per
+  this calendar. Stale stocks are not given new entries and are listed in
+  the email; open positions are still evaluated on the data available.
+- Invoke with {"force": true} to run on a non-session day.
 - File naming: system code as SUFFIX everywhere —
   watchlist_dt.csv, positions_dt.csv, trade_log_hit_dt.csv,
   trade_log_miss_dt.csv. The old combined dt_trade_log.csv is retired
@@ -42,7 +51,7 @@ import smtplib
 import time
 import base64
 from io import StringIO
-from datetime import datetime
+from datetime import datetime, date, timedelta, timezone
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import requests
@@ -53,11 +62,15 @@ import requests
 SYSTEM_CODE       = "dt"
 
 LOOKBACK          = 15
-TRAIL_STOP_PCT    = 10.0
+TRAIL_STOP_PCT    = 3.0
 EMA_LONG          = 200
 POSITION_SIZE     = 10000
 SLEEP             = 0.5
 HIT_THRESHOLD_PCT = 3.0   # PnL% strictly greater than this -> hit, else -> miss
+
+IST                = timezone(timedelta(hours=5, minutes=30))
+BAR_FINAL_HOUR_IST = 16      # today's daily bar counts as complete only after this hour (IST)
+HOLIDAY_PATH       = 'data/nse_holidays.csv'
 
 DATA_PERIOD       = "1y"  # sufficient for the 15-bar step lines and EMA200
                            # (EMA200 here is a daily freshness gate only —
@@ -71,7 +84,7 @@ DATA_PERIOD       = "1y"  # sufficient for the 15-bar step lines and EMA200
 def fetch_price_bars(symbol, period=DATA_PERIOD):
     """
     Fetch daily OHLC bars for a symbol.
-    Returns a list of dicts: {'date', 'high', 'low', 'close'}
+    Returns a list of dicts: {'date', 'open', 'high', 'low', 'close'}
     ordered oldest -> newest. Returns None on failure.
     """
     ticker = symbol.upper().strip()
@@ -93,19 +106,22 @@ def fetch_price_bars(symbol, period=DATA_PERIOD):
             result = data['chart']['result'][0]
             timestamps = result['timestamp']
             quote = result['indicators']['quote'][0]
+            opens  = quote['open']
             highs  = quote['high']
             lows   = quote['low']
             closes = quote['close']
 
             bars = []
             for i, ts in enumerate(timestamps):
+                o = opens[i]
                 c = closes[i]
                 h = highs[i]
                 l = lows[i]
-                if c is None or h is None or l is None:
+                if o is None or c is None or h is None or l is None:
                     continue
                 bars.append({
                     'date':  datetime.utcfromtimestamp(ts).date(),
+                    'open':  o,
                     'high':  h,
                     'low':   l,
                     'close': c,
@@ -128,11 +144,16 @@ def calc_ema(values, period):
     return round(ema, 2)
 
 
-def high_since(bars, entry_dt):
-    """Highest daily HIGH from entry_dt (inclusive) to the most recent bar."""
-    relevant = [b['high'] for b in bars if b['date'] >= entry_dt]
+def body_top(bar):
+    """Top of the candle body: max(open, close). Wicks are ignored."""
+    return max(bar['open'], bar['close'])
+
+
+def body_high_since(bars, entry_dt):
+    """Highest candle BODY TOP from entry_dt (inclusive) to the most recent bar."""
+    relevant = [body_top(b) for b in bars if b['date'] >= entry_dt]
     if not relevant:
-        return bars[-1]['high'] if bars else None
+        return body_top(bars[-1]) if bars else None
     return max(relevant)
 
 
@@ -235,7 +256,83 @@ def get_indicators(symbol, period=DATA_PERIOD):
         'lower_state':      last['lower_state'],
         'confluence':       last['confluence'],
         'fresh_confluence': last['fresh_confluence'],
+        'last_date':        bars[-1]['date'],
     }
+
+
+# ─────────────────────────────────────────────
+# TRADING CALENDAR (explicit holiday list — not inferred from Yahoo)
+# ─────────────────────────────────────────────
+HOLIDAYS          = set()
+CALENDAR_THROUGH  = None    # date through which the holiday list is known complete
+CALENDAR_OK       = False
+REF_DATE          = None    # last COMPLETED session per the calendar (set in main)
+
+
+def load_calendar(content):
+    """Parse data/nse_holidays.csv (Date,Type,Description)."""
+    global HOLIDAYS, CALENDAR_THROUGH, CALENDAR_OK
+    HOLIDAYS, CALENDAR_THROUGH = set(), None
+    for r in parse_csv(content):
+        t = (r.get('Type') or '').strip().upper()
+        d = parse_date(r.get('Date'))
+        if d is None:
+            continue
+        if t == 'HOLIDAY':
+            HOLIDAYS.add(d)
+        elif t == 'COVERS_THROUGH':
+            CALENDAR_THROUGH = d
+    CALENDAR_OK = True
+
+
+def parse_date(v):
+    try:
+        return datetime.strptime(str(v).strip()[:10], '%Y-%m-%d').date()
+    except (ValueError, TypeError):
+        return None
+
+
+def is_trading_day(d):
+    return d.weekday() < 5 and d not in HOLIDAYS
+
+
+def prev_trading_day(d):
+    d -= timedelta(days=1)
+    while not is_trading_day(d):
+        d -= timedelta(days=1)
+    return d
+
+
+def last_completed_session(now_ist):
+    """Most recent session whose daily bar should be final at now_ist."""
+    d = now_ist.date()
+    if is_trading_day(d) and now_ist.hour >= BAR_FINAL_HOUR_IST:
+        return d
+    return prev_trading_day(d)
+
+
+def calendar_notices(today):
+    notes = []
+    if not CALENDAR_OK:
+        notes.append(f"Holiday calendar ({HOLIDAY_PATH}) could not be loaded — only weekends are "
+                     f"treated as non-trading days.")
+    elif CALENDAR_THROUGH is None or today > CALENDAR_THROUGH:
+        notes.append(f"Holiday calendar is only confirmed through {CALENDAR_THROUGH} — update "
+                     f"{HOLIDAY_PATH} and its COVERS_THROUGH row.")
+    elif (CALENDAR_THROUGH - today).days < 14:
+        notes.append(f"Holiday calendar ends {CALENDAR_THROUGH} — add the next holidays soon.")
+    return notes
+
+
+def fetch_ref_date():
+    """Newest bar date on ^NSEI — used only as a cross-check of the calendar."""
+    bars = fetch_price_bars('^NSEI', '5d')
+    return bars[-1]['date'] if bars else None
+
+
+def is_stale(ind):
+    """True if this symbol's newest bar is older than the last completed session."""
+    return bool(REF_DATE and ind.get('last_date') and ind['last_date'] < REF_DATE)
 
 
 # ─────────────────────────────────────────────
@@ -317,7 +414,7 @@ def run_exit(positions, hit_log, miss_log):
 
         price = ind['price']
 
-        hi_since = high_since(ind['bars'], entry_date.date())
+        hi_since = body_high_since(ind['bars'], entry_date.date())
         trail_stop_price = round(hi_since * (1 - TRAIL_STOP_PCT / 100), 2) if hi_since else None
 
         signal_reversed = (ind['upper_state'] == -1 and ind['lower_state'] == -1)
@@ -329,13 +426,13 @@ def run_exit(positions, hit_log, miss_log):
         if signal_reversed and trail_stop:
             exit_type   = 'STOP_BOTH'
             exit_reason = (f"Both lines flipped bearish AND trailing stop hit "
-                            f"({trail_stop_price}, high since entry {hi_since})")
+                            f"({trail_stop_price}, body high since entry {hi_since})")
         elif signal_reversed:
             exit_type   = 'SIGNAL'
             exit_reason = "Both lines flipped bearish — trend reversal"
         elif trail_stop:
             exit_type   = 'STOP_TRAIL'
-            exit_reason = f"Trailing stop hit ({trail_stop_price}, high since entry {hi_since})"
+            exit_reason = f"Trailing stop hit ({trail_stop_price}, body high since entry {hi_since})"
 
         pnl     = round((price - entry_price) * quantity, 2)
         pnl_pct = round((price - entry_price) / entry_price * 100, 2)
@@ -397,8 +494,9 @@ def run_entry(watchlist, positions):
     AND price above EMA200 today.
     """
     open_symbols = {p['Symbol'].strip() for p in positions}
-    new_entries  = []
-    snapshots    = []
+    new_entries   = []
+    snapshots     = []
+    stale_skipped = []
 
     for row in watchlist:
         symbol = row['Symbol'].strip()
@@ -407,6 +505,11 @@ def run_entry(watchlist, positions):
 
         ind = get_indicators(symbol)
         if ind is None:
+            time.sleep(SLEEP)
+            continue
+
+        if is_stale(ind):
+            stale_skipped.append(symbol)
             time.sleep(SLEEP)
             continue
 
@@ -452,14 +555,28 @@ def run_entry(watchlist, positions):
 
         time.sleep(SLEEP)
 
-    return new_entries, positions, snapshots
+    return new_entries, positions, snapshots, stale_skipped
 
 
 # ─────────────────────────────────────────────
 # EMAIL
 # ─────────────────────────────────────────────
+def send_holiday_email(today, reason):
+    sender     = os.environ.get('GMAIL_SENDER')
+    password   = os.environ.get('GMAIL_APP_PASSWORD')
+    recipients = [r.strip() for r in os.environ.get('GMAIL_RECIPIENT', '').split(',') if r.strip()]
+    msg = MIMEMultipart()
+    msg['From']    = sender
+    msg['To']      = ', '.join(recipients)
+    msg['Subject'] = f"NSE Dual Trend — {today.strftime('%d %b %Y')} | market holiday — no run"
+    msg.attach(MIMEText(f"<p>{reason}. No positions or logs were touched.</p>", 'html'))
+    with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
+        server.login(sender, password)
+        server.sendmail(sender, recipients, msg.as_string())
+
+
 def send_email(exits, entries, holds, warnings, alltime_pnl, alltime_count,
-               hit_count, miss_count):
+               hit_count, miss_count, notices=None, stale_skipped=None):
     sender    = os.environ.get('GMAIL_SENDER')
     password  = os.environ.get('GMAIL_APP_PASSWORD')
     recipients = [r.strip() for r in os.environ.get('GMAIL_RECIPIENT', '').split(',') if r.strip()]
@@ -488,6 +605,18 @@ def send_email(exits, entries, holds, warnings, alltime_pnl, alltime_count,
         📈 NSE Dual Trend Swing Trader — {today}
     </h2>
     '''
+
+    # CALENDAR NOTICES / STALE DATA
+    notices       = notices or []
+    stale_skipped = stale_skipped or []
+    if notices or stale_skipped:
+        html += '<div style="background:#fff8e1;border:1px solid #f0c040;padding:10px 14px;margin-top:12px;font-size:13px;">'
+        for n in notices:
+            html += f'<div>⚠️ {n}</div>'
+        if stale_skipped:
+            stale_list = ', '.join(stale_skipped)
+            html += f'<div>⚠️ Skipped for new entry (stale data): {stale_list}</div>'
+        html += '</div>'
 
     # EXITS
     html += section_header(
@@ -619,6 +748,10 @@ def send_email(exits, entries, holds, warnings, alltime_pnl, alltime_count,
 # MAIN
 # ─────────────────────────────────────────────
 def main(args):
+    global REF_DATE
+    args  = args or {}
+    force = bool(args.get('force'))
+
     print("\n" + "="*50)
     print("  NSE DUAL TREND TRADER — DO Functions Run")
     print("="*50)
@@ -633,6 +766,32 @@ def main(args):
     snap_path     = f'data/entry_snapshot_{SYSTEM_CODE}.csv'
 
     try:
+        # Trading calendar (explicit holiday list)
+        now_ist = datetime.now(IST)
+        today   = now_ist.date()
+        try:
+            cal_content, _ = github_get(repo_name, HOLIDAY_PATH, pat)
+            load_calendar(cal_content)
+            print(f"      Calendar: {len(HOLIDAYS)} holidays, confirmed through {CALENDAR_THROUGH}")
+        except Exception as e:
+            print(f"      WARNING: could not load {HOLIDAY_PATH}: {e}")
+        notices = calendar_notices(today)
+
+        if not is_trading_day(today) and not force:
+            reason = ('Weekend' if today.weekday() >= 5 else 'NSE trading holiday') + f" ({today})"
+            print(f"  {reason} — nothing to do.")
+            if today.weekday() < 5:
+                send_holiday_email(today, reason)
+            return {"statusCode": 200, "body": f"{reason}: skipped"}
+
+        REF_DATE = last_completed_session(now_ist)
+        nifty_date = fetch_ref_date()
+        print(f"      Last completed session (calendar): {REF_DATE} | NIFTY newest bar: {nifty_date}")
+        if nifty_date and nifty_date != REF_DATE:
+            notices.append(f"Calendar expects the last session to be {REF_DATE} but NIFTY's newest "
+                           f"bar is {nifty_date} — either Yahoo is lagging/ahead or the holiday "
+                           f"list is wrong.")
+
         # Load data from GitHub
         print("\n[1/5] Loading data from GitHub...")
         pos_content, pos_sha       = github_get(repo_name, pos_path, pat)
@@ -655,9 +814,9 @@ def main(args):
 
         # Entry scanner
         print("\n[3/5] Entry Scanner...")
-        entries, positions, new_snapshots = run_entry(watchlist, positions)
+        entries, positions, new_snapshots, stale_skipped = run_entry(watchlist, positions)
         entry_snapshots.extend(new_snapshots)
-        print(f"      {len(entries)} new signal(s)")
+        print(f"      {len(entries)} new signal(s) | {len(stale_skipped)} stale stock(s) skipped")
 
         # Sync to GitHub
         print("\n[4/5] Syncing to GitHub...")
@@ -687,7 +846,8 @@ def main(args):
         # Send email
         print("\n[5/5] Sending email...")
         send_email(exits, entries, holds, warnings, alltime_pnl, alltime_count,
-                   len(hit_log), len(miss_log))
+                   len(hit_log), len(miss_log),
+                   notices=notices, stale_skipped=stale_skipped)
 
         print("\n  Done.\n")
         return {"statusCode": 200, "body": "Pipeline complete"}
