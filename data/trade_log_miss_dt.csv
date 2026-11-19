@@ -24,3 +24,13 @@ STARHEALTH,2026-10-19,548.85,18,9879.3,2026-11-06,530.5,-330.3,-3.34,18,Both lin
 PNBHOUSING,2026-10-22,1146.0,8,9168.0,2026-11-06,1082.0,-512.0,-5.58,15,Both lines flipped bearish — trend reversal,Paper
 CHENNPETRO,2026-10-28,1573.8,6,9442.8,2026-11-06,1418.5,-931.8,-9.87,9,"Trailing stop hit (1436.76, high since entry 1596.4000244140625)",Paper
 PFOCUS,2026-11-05,305.55,32,9777.6,2026-11-10,279.6,-830.4,-8.49,5,"Trailing stop hit (280.03, high since entry 311.1499938964844)",Paper
+HAL,2026-10-23,4875.0,2,9750.0,2026-11-19,4675.0,-400.0,-4.1,27,"Trailing stop hit (4947.0, body high since entry 5100.0)",Paper
+PTCIL,2026-10-23,25115.0,1,25115.0,2026-11-19,23950.0,-1165.0,-4.64,27,"Trailing stop hit (24254.85, body high since entry 25005.0)",Paper
+ADANIPORTS,2026-11-02,1850.0,5,9250.0,2026-11-19,1902.6,263.0,2.84,17,"Trailing stop hit (1919.63, body high since entry 1979.0)",Paper
+BAJAJ-AUTO,2026-11-02,10350.0,1,10350.0,2026-11-19,10570.0,220.0,2.13,17,"Trailing stop hit (10708.8, body high since entry 11040.0)",Paper
+BOSCHLTD,2026-11-03,48100.0,1,48100.0,2026-11-19,49170.0,1070.0,2.22,16,"Trailing stop hit (50900.75, body high since entry 52475.0)",Paper
+JSWSTEEL,2026-11-06,1355.6,7,9489.2,2026-11-19,1315.9,-277.9,-2.93,13,"Trailing stop hit (1321.72, body high since entry 1362.5999755859375)",Paper
+GABRIEL,2026-11-13,1641.2,6,9847.2,2026-11-19,1491.2,-900.0,-9.14,6,"Trailing stop hit (1561.7, body high since entry 1610.0)",Paper
+SONACOMS,2026-11-16,919.0,10,9190.0,2026-11-19,889.0,-300.0,-3.26,3,"Trailing stop hit (890.8, body high since entry 918.3499755859375)",Paper
+IDEA,2026-11-17,12.53,798,9998.94,2026-11-19,12.1,-343.14,-3.43,2,"Trailing stop hit (12.12, body high since entry 12.489999771118164)",Paper
+MOTHERSON,2026-11-18,164.39,60,9863.4,2026-11-19,157.24,-429.0,-4.35,1,"Trailing stop hit (157.25, body high since entry 162.11000061035156)",Paper
